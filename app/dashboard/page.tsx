@@ -8,29 +8,25 @@ import Link from "next/link"
 import { createClient } from "@/utils/supabase/client"
 import { useEffect, useState } from "react"
 import { useUser } from "@clerk/nextjs"
-
-const goalsData = [
-  { name: "Learn React", progress: 75, target: 100 },
-  { name: "Master TypeScript", progress: 60, target: 100 },
-  { name: "Build Projects", progress: 45, target: 100 },
-]
-
-const timeLogData = [
-  { day: "Mon", hours: 2 },
-  { day: "Tue", hours: 3 },
-  { day: "Wed", hours: 2.5 },
-  { day: "Thu", hours: 4 },
-  { day: "Fri", hours: 3.5 },
-  { day: "Sat", hours: 2 },
-  { day: "Sun", hours: 1.5 },
-]
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 
 export default function Dashboard() {
   const { user } = useUser()
   const [focusSessions, setFocusSessions] = useState<any[]>([])
   const [reflections, setReflections] = useState<any[]>([])
   const [pomodoroHistory, setPomodoroHistory] = useState<any[]>([])
+  const [goals, setGoals] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [isAddGoalOpen, setIsAddGoalOpen] = useState(false)
+  const [newGoalName, setNewGoalName] = useState("")
+  const [weeklyData, setWeeklyData] = useState<any[]>([])
+  const [stats, setStats] = useState({
+    streak: 0,
+    weeklyHours: 0,
+    activeGoals: 0
+  })
 
   useEffect(() => {
     const fetchData = async () => {
@@ -41,7 +37,7 @@ export default function Dashboard() {
 
       try {
         const supabase = createClient()
-        
+
         // Fetch user's focus sessions
         const { data: sessions } = await supabase
           .from('focus_sessions')
@@ -66,9 +62,20 @@ export default function Dashboard() {
           .order('start_time', { ascending: false })
           .limit(10)
 
+        // Fetch user's goals
+        const { data: userGoals } = await supabase
+          .from('goals')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+
         setFocusSessions(sessions || [])
         setReflections(userReflections || [])
         setPomodoroHistory(pomodoro || [])
+        setGoals(userGoals || [])
+
+        // Calculate stats from real data
+        calculateStats(sessions || [], pomodoro || [], userGoals || [])
 
       } catch (error) {
         console.error('Error fetching data:', error)
@@ -79,6 +86,79 @@ export default function Dashboard() {
 
     fetchData()
   }, [user])
+
+  const calculateStats = (sessions: any[], pomodoros: any[], userGoals: any[]) => {
+    // Calculate weekly hours from pomodoro history
+    const now = new Date()
+    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+    const weeklyPomodoros = pomodoros.filter(p => new Date(p.start_time) >= weekAgo && p.completed)
+    const weeklyHours = weeklyPomodoros.reduce((sum, p) => sum + (p.duration || 25), 0) / 60
+
+    // Calculate streak (consecutive days with activity)
+    const sessionDates = sessions.map(s => new Date(s.created_at).toDateString())
+    const uniqueDates = [...new Set(sessionDates)].sort((a, b) => new Date(b).getTime() - new Date(a).getTime())
+    let streak = 0
+    for (let i = 0; i < uniqueDates.length; i++) {
+      const date = new Date(uniqueDates[i])
+      const expectedDate = new Date(now.getTime() - i * 24 * 60 * 60 * 1000).toDateString()
+      if (date.toDateString() === expectedDate) {
+        streak++
+      } else {
+        break
+      }
+    }
+
+    // Generate weekly chart data
+    const weeklyChartData = []
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date(now.getTime() - i * 24 * 60 * 60 * 1000)
+      const dayPomodoros = pomodoros.filter(p => {
+        const pDate = new Date(p.start_time)
+        return pDate.toDateString() === date.toDateString() && p.completed
+      })
+      const hours = dayPomodoros.reduce((sum, p) => sum + (p.duration || 25), 0) / 60
+      weeklyChartData.push({
+        day: days[date.getDay()],
+        hours: Math.round(hours * 10) / 10
+      })
+    }
+
+    setWeeklyData(weeklyChartData)
+    setStats({
+      streak,
+      weeklyHours: Math.round(weeklyHours * 10) / 10,
+      activeGoals: userGoals.length
+    })
+  }
+
+  const handleAddGoal = async () => {
+    if (!newGoalName.trim() || !user) return
+
+    try {
+      const supabase = createClient()
+      const { data, error } = await supabase
+        .from('goals')
+        .insert({
+          user_id: user.id,
+          name: newGoalName,
+          progress: 0,
+          target: 100
+        })
+        .select()
+
+      if (error) throw error
+
+      if (data) {
+        setGoals([...goals, data[0]])
+        setStats({ ...stats, activeGoals: goals.length + 1 })
+      }
+      setNewGoalName("")
+      setIsAddGoalOpen(false)
+    } catch (error) {
+      console.error('Error adding goal:', error)
+    }
+  }
 
   if (loading) {
     return (
@@ -111,17 +191,17 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
             <Card className="bg-white/5 border-white/10 backdrop-blur-sm p-6">
               <div className="text-white/60 text-sm mb-2">Current Streak</div>
-              <div className="text-4xl font-bold mb-2">12 days</div>
-              <div className="text-white/40 text-xs">Keep it going!</div>
+              <div className="text-4xl font-bold mb-2">{stats.streak} {stats.streak === 1 ? 'day' : 'days'}</div>
+              <div className="text-white/40 text-xs">{stats.streak > 0 ? 'Keep it going!' : 'Start your streak today!'}</div>
             </Card>
             <Card className="bg-white/5 border-white/10 backdrop-blur-sm p-6">
               <div className="text-white/60 text-sm mb-2">This Week</div>
-              <div className="text-4xl font-bold mb-2">18.5 hrs</div>
+              <div className="text-4xl font-bold mb-2">{stats.weeklyHours} hrs</div>
               <div className="text-white/40 text-xs">Total focus time</div>
             </Card>
             <Card className="bg-white/5 border-white/10 backdrop-blur-sm p-6">
               <div className="text-white/60 text-sm mb-2">Goals Active</div>
-              <div className="text-4xl font-bold mb-2">3</div>
+              <div className="text-4xl font-bold mb-2">{stats.activeGoals}</div>
               <div className="text-white/40 text-xs">In progress</div>
             </Card>
           </div>
@@ -130,38 +210,75 @@ export default function Dashboard() {
           <div className="mb-12">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-2xl font-bold">Active Goals</h2>
-              <Button className="bg-white text-black hover:opacity-90">Add Goal</Button>
-            </div>
-            <div className="space-y-4">
-              {goalsData.map((goal) => (
-                <Card key={goal.name} className="bg-white/5 border-white/10 backdrop-blur-sm p-6">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="font-semibold">{goal.name}</h3>
-                    <span className="text-white/60 text-sm">{goal.progress}%</span>
+              <Dialog open={isAddGoalOpen} onOpenChange={setIsAddGoalOpen}>
+                <DialogTrigger asChild>
+                  <Button className="bg-white text-black hover:opacity-90">Add Goal</Button>
+                </DialogTrigger>
+                <DialogContent className="bg-black border-white/20">
+                  <DialogHeader>
+                    <DialogTitle>Add New Goal</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-4">
+                    <div>
+                      <Label htmlFor="goal-name">Goal Name</Label>
+                      <Input
+                        id="goal-name"
+                        value={newGoalName}
+                        onChange={(e) => setNewGoalName(e.target.value)}
+                        placeholder="e.g., Learn React"
+                        className="bg-white/5 border-white/10"
+                      />
+                    </div>
+                    <Button
+                      onClick={handleAddGoal}
+                      className="w-full bg-white text-black hover:opacity-90"
+                    >
+                      Create Goal
+                    </Button>
                   </div>
-                  <div className="w-full bg-white/10 rounded-full h-2">
-                    <div className="bg-white h-2 rounded-full transition-all" style={{ width: `${goal.progress}%` }} />
-                  </div>
-                </Card>
-              ))}
+                </DialogContent>
+              </Dialog>
             </div>
+            {goals.length > 0 ? (
+              <div className="space-y-4">
+                {goals.map((goal) => (
+                  <Card key={goal.id} className="bg-white/5 border-white/10 backdrop-blur-sm p-6">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="font-semibold">{goal.name}</h3>
+                      <span className="text-white/60 text-sm">{goal.progress}%</span>
+                    </div>
+                    <div className="w-full bg-white/10 rounded-full h-2">
+                      <div className="bg-white h-2 rounded-full transition-all" style={{ width: `${goal.progress}%` }} />
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <p className="text-white/60">No goals yet. Add your first goal to get started!</p>
+            )}
           </div>
 
           {/* Time Logged Chart */}
           <div className="mb-12">
             <h2 className="text-2xl font-bold mb-6">Weekly Focus Time</h2>
             <Card className="bg-white/5 border-white/10 backdrop-blur-sm p-6">
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={timeLogData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                  <XAxis dataKey="day" stroke="rgba(255,255,255,0.5)" />
-                  <YAxis stroke="rgba(255,255,255,0.5)" />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: "rgba(0,0,0,0.8)", border: "1px solid rgba(255,255,255,0.2)" }}
-                  />
-                  <Bar dataKey="hours" fill="rgba(255,255,255,0.8)" radius={[8, 8, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              {weeklyData.length > 0 && weeklyData.some(d => d.hours > 0) ? (
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={weeklyData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+                    <XAxis dataKey="day" stroke="rgba(255,255,255,0.5)" />
+                    <YAxis stroke="rgba(255,255,255,0.5)" />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: "rgba(0,0,0,0.8)", border: "1px solid rgba(255,255,255,0.2)" }}
+                    />
+                    <Bar dataKey="hours" fill="rgba(255,255,255,0.8)" radius={[8, 8, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-[300px] flex items-center justify-center text-white/60">
+                  No focus time recorded this week. Start a focus session to see your progress!
+                </div>
+              )}
             </Card>
           </div>
 

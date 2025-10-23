@@ -4,17 +4,80 @@ import type React from "react"
 import { Navigation } from "@/components/navigation"
 import { StatCard } from "@/components/stat-card"
 import { useState } from "react"
-import { Clock, Zap, Target } from "lucide-react"
+import { Clock, Zap, Target, Loader2 } from "lucide-react"
+import { useUser } from "@clerk/nextjs"
+import { createClient } from "@/utils/supabase/client"
 
 export default function ProductPage() {
+  const { user } = useUser()
   const [timeAvailable, setTimeAvailable] = useState("")
   const [subject, setSubject] = useState("")
   const [subtopic, setSubtopic] = useState("")
   const [showOutput, setShowOutput] = useState(false)
+  const [generatedPlan, setGeneratedPlan] = useState("")
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState("")
 
-  const handleGenerate = (e: React.FormEvent) => {
+  const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault()
-    setShowOutput(true)
+    setLoading(true)
+    setError("")
+    setShowOutput(false)
+
+    try {
+      const response = await fetch('/api/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          time: timeAvailable,
+          subject,
+          subTopic: subtopic
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to generate plan')
+      }
+
+      const data = await response.json()
+
+      if (data.error) {
+        setError(data.error)
+        setLoading(false)
+        return
+      }
+
+      setGeneratedPlan(data.output)
+      setShowOutput(true)
+
+      if (user) {
+        const supabase = createClient()
+        await supabase.from('focus_sessions').insert({
+          user_id: user.id,
+          time: parseInt(timeAvailable) || 0,
+          subject,
+          sub_topic: subtopic,
+          output_text: data.output
+        })
+      }
+
+    } catch (err) {
+      setError('Failed to generate plan. Please try again.')
+      console.error(err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const parseGeneratedPlan = (plan: string) => {
+    const lines = plan.split('\n').filter(line => line.trim())
+    return {
+      timeline: lines.slice(0, 4).map(line => line.trim()),
+      resources: lines.slice(4, 8).map(line => line.trim()),
+      execution: lines.slice(8).map(line => line.trim())
+    }
   }
 
   return (
@@ -81,53 +144,36 @@ export default function ProductPage() {
 
                   <button
                     type="submit"
-                    className="w-full px-6 py-4 bg-accent text-accent-foreground font-bold rounded-lg hover:opacity-90 transition-opacity"
+                    disabled={loading}
+                    className="w-full px-6 py-4 bg-accent text-accent-foreground font-bold rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   >
-                    Generate My Focus Plan
+                    {loading ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        Generating...
+                      </>
+                    ) : (
+                      'Generate My Focus Plan'
+                    )}
                   </button>
                   <p className="text-center text-foreground/70 italic text-sm">Your excuses just expired.</p>
                 </form>
+
+                {error && (
+                  <div className="mt-4 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+                    <p className="text-red-400">{error}</p>
+                  </div>
+                )}
               </div>
 
               {/* Output Section */}
-              {showOutput && (
+              {showOutput && generatedPlan && (
                 <div className="space-y-6">
                   <div className="bg-card border border-border rounded-lg p-8 card-hover">
-                    <h3 className="text-2xl font-bold text-accent mb-6">Timeline</h3>
-                    <div className="space-y-4">
-                      {[
-                        { time: "0:00 - 0:15", task: "Setup environment & review fundamentals" },
-                        { time: "0:15 - 0:45", task: "Deep dive into core concepts" },
-                        { time: "0:45 - 1:15", task: "Hands-on practice & implementation" },
-                        { time: "1:15 - 1:30", task: "Review & consolidate learning" },
-                      ].map((item, i) => (
-                        <div key={i} className="flex gap-4 pb-4 border-b border-border last:border-0 last:pb-0">
-                          <div className="text-accent font-bold min-w-fit">{item.time}</div>
-                          <div className="text-foreground">{item.task}</div>
-                        </div>
-                      ))}
+                    <h3 className="text-2xl font-bold text-accent mb-6">Your AI-Generated Focus Plan</h3>
+                    <div className="text-foreground whitespace-pre-wrap leading-relaxed">
+                      {generatedPlan}
                     </div>
-                  </div>
-
-                  <div className="bg-card border border-border rounded-lg p-8 card-hover">
-                    <h3 className="text-2xl font-bold text-accent mb-6">Resources</h3>
-                    <ul className="space-y-2 text-foreground">
-                      <li>• React Official Documentation</li>
-                      <li>• React Hooks Deep Dive (YouTube)</li>
-                      <li>• State Management Patterns</li>
-                      <li>• Practice Projects Repository</li>
-                    </ul>
-                  </div>
-
-                  <div className="bg-card border border-border rounded-lg p-8 card-hover">
-                    <h3 className="text-2xl font-bold text-accent mb-6">Execution Plan</h3>
-                    <ol className="space-y-3 text-foreground list-decimal list-inside">
-                      <li>Open IDE and create new project</li>
-                      <li>Read documentation for 15 minutes</li>
-                      <li>Write first component with hooks</li>
-                      <li>Test and debug</li>
-                      <li>Document what you learned</li>
-                    </ol>
                   </div>
                 </div>
               )}
