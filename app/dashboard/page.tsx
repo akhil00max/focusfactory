@@ -9,21 +9,19 @@ import { createClient } from "@/utils/supabase/client"
 import { useEffect, useState } from "react"
 import { useUser } from "@clerk/nextjs"
 
-const goalsData = [
-  { name: "Learn React", progress: 75, target: 100 },
-  { name: "Master TypeScript", progress: 60, target: 100 },
-  { name: "Build Projects", progress: 45, target: 100 },
-]
+// Helper function to get day of week from date
+const getDayOfWeek = (date: Date) => {
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  return days[date.getDay()]
+}
 
-const timeLogData = [
-  { day: "Mon", hours: 2 },
-  { day: "Tue", hours: 3 },
-  { day: "Wed", hours: 2.5 },
-  { day: "Thu", hours: 4 },
-  { day: "Fri", hours: 3.5 },
-  { day: "Sat", hours: 2 },
-  { day: "Sun", hours: 1.5 },
-]
+// Helper function to get the start of the week
+const getStartOfWeek = (date: Date) => {
+  const d = new Date(date)
+  const day = d.getDay()
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1) // Adjust when day is Sunday
+  return new Date(d.setDate(diff))
+}
 
 export default function Dashboard() {
   const { user } = useUser()
@@ -31,6 +29,20 @@ export default function Dashboard() {
   const [reflections, setReflections] = useState<any[]>([])
   const [pomodoroHistory, setPomodoroHistory] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [stats, setStats] = useState({
+    currentStreak: 0,
+    weeklyHours: 0,
+    activeGoals: 0,
+    timeLogData: Array(7).fill(0).map((_, i) => {
+      const date = new Date()
+      date.setDate(date.getDate() - (6 - i))
+      return {
+        day: getDayOfWeek(date),
+        hours: 0,
+        date: date.toISOString().split('T')[0]
+      }
+    })
+  })
 
   useEffect(() => {
     const fetchData = async () => {
@@ -50,6 +62,39 @@ export default function Dashboard() {
           .order('created_at', { ascending: false })
           .limit(5)
 
+        // Calculate weekly hours
+        const startOfWeek = getStartOfWeek(new Date())
+        const weeklySessions = sessions?.filter(session => {
+          const sessionDate = new Date(session.created_at)
+          return sessionDate >= startOfWeek
+        }) || []
+        
+        const weeklyHours = weeklySessions.reduce((total, session) => {
+          return total + (parseInt(session.time) || 0)
+        }, 0) / 60 // Convert minutes to hours
+
+        // Calculate time log data
+        const timeLogData = Array(7).fill(0).map((_, i) => {
+          const date = new Date()
+          date.setDate(date.getDate() - (6 - i))
+          const dateStr = date.toISOString().split('T')[0]
+          
+          const daySessions = sessions?.filter(session => {
+            const sessionDate = new Date(session.created_at).toISOString().split('T')[0]
+            return sessionDate === dateStr
+          }) || []
+          
+          const dayHours = daySessions.reduce((total, session) => {
+            return total + (parseInt(session.time) || 0)
+          }, 0) / 60 // Convert minutes to hours
+          
+          return {
+            day: getDayOfWeek(date),
+            hours: parseFloat(dayHours.toFixed(1)),
+            date: dateStr
+          }
+        })
+
         // Fetch user's reflections
         const { data: userReflections } = await supabase
           .from('reflections')
@@ -57,6 +102,40 @@ export default function Dashboard() {
           .eq('user_id', user.id)
           .order('date', { ascending: false })
           .limit(5)
+
+        // Calculate current streak from reflections
+        let currentStreak = 0
+        if (userReflections && userReflections.length > 0) {
+          const today = new Date().toISOString().split('T')[0]
+          const yesterday = new Date()
+          yesterday.setDate(yesterday.getDate() - 1)
+          const yesterdayStr = yesterday.toISOString().split('T')[0]
+          
+          // Check if user reflected today or yesterday
+          const hasToday = userReflections.some(r => r.date === today)
+          const hasYesterday = userReflections.some(r => r.date === yesterdayStr)
+          
+          if (hasToday || hasYesterday) {
+            currentStreak = 1
+            // Count consecutive days with reflections
+            const sortedReflections = [...userReflections].sort((a, b) => 
+              new Date(b.date).getTime() - new Date(a.date).getTime()
+            )
+            
+            for (let i = 1; i < sortedReflections.length; i++) {
+              const prevDate = new Date(sortedReflections[i - 1].date)
+              const currDate = new Date(sortedReflections[i].date)
+              const diffTime = prevDate.getTime() - currDate.getTime()
+              const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+              
+              if (diffDays === 1) {
+                currentStreak++
+              } else if (diffDays > 1) {
+                break // Streak broken
+              }
+            }
+          }
+        }
 
         // Fetch user's pomodoro history
         const { data: pomodoro } = await supabase
@@ -66,9 +145,18 @@ export default function Dashboard() {
           .order('start_time', { ascending: false })
           .limit(10)
 
+        // Count active goals (focus sessions not marked as completed)
+        const activeGoals = sessions?.filter(session => !session.completed).length || 0
+
         setFocusSessions(sessions || [])
         setReflections(userReflections || [])
         setPomodoroHistory(pomodoro || [])
+        setStats({
+          currentStreak,
+          weeklyHours: parseFloat(weeklyHours.toFixed(1)),
+          activeGoals,
+          timeLogData
+        })
 
       } catch (error) {
         console.error('Error fetching data:', error)
@@ -111,57 +199,118 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
             <Card className="bg-white/5 border-white/10 backdrop-blur-sm p-6">
               <div className="text-white/60 text-sm mb-2">Current Streak</div>
-              <div className="text-4xl font-bold mb-2">12 days</div>
-              <div className="text-white/40 text-xs">Keep it going!</div>
+              <div className="text-4xl font-bold mb-2">{stats.currentStreak} {stats.currentStreak === 1 ? 'day' : 'days'}</div>
+              <div className="text-white/40 text-xs">
+                {stats.currentStreak > 0 ? 'Keep it going! 🔥' : 'Start a new streak today!'}
+              </div>
             </Card>
             <Card className="bg-white/5 border-white/10 backdrop-blur-sm p-6">
               <div className="text-white/60 text-sm mb-2">This Week</div>
-              <div className="text-4xl font-bold mb-2">18.5 hrs</div>
-              <div className="text-white/40 text-xs">Total focus time</div>
+              <div className="text-4xl font-bold mb-2">{stats.weeklyHours} hrs</div>
+              <div className="text-white/40 text-xs">
+                {stats.weeklyHours > 10 ? 'Amazing focus! 🚀' : 'Keep pushing!'}
+              </div>
             </Card>
             <Card className="bg-white/5 border-white/10 backdrop-blur-sm p-6">
-              <div className="text-white/60 text-sm mb-2">Goals Active</div>
-              <div className="text-4xl font-bold mb-2">3</div>
-              <div className="text-white/40 text-xs">In progress</div>
+              <div className="text-white/60 text-sm mb-2">Active Sessions</div>
+              <div className="text-4xl font-bold mb-2">{stats.activeGoals}</div>
+              <div className="text-white/40 text-xs">
+                {stats.activeGoals > 0 ? 'In progress' : 'No active sessions'}
+              </div>
             </Card>
           </div>
 
-          {/* Goals Section */}
+          {/* Recent Focus Sessions */}
           <div className="mb-12">
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-2xl font-bold">Active Goals</h2>
-              <Button className="bg-white text-black hover:opacity-90">Add Goal</Button>
+              <h2 className="text-2xl font-bold">Recent Focus Sessions</h2>
+              <Link href="/flow-mode">
+                <Button className="bg-white text-black hover:opacity-90">New Session</Button>
+              </Link>
             </div>
-            <div className="space-y-4">
-              {goalsData.map((goal) => (
-                <Card key={goal.name} className="bg-white/5 border-white/10 backdrop-blur-sm p-6">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="font-semibold">{goal.name}</h3>
-                    <span className="text-white/60 text-sm">{goal.progress}%</span>
-                  </div>
-                  <div className="w-full bg-white/10 rounded-full h-2">
-                    <div className="bg-white h-2 rounded-full transition-all" style={{ width: `${goal.progress}%` }} />
-                  </div>
-                </Card>
-              ))}
-            </div>
+            {focusSessions.length > 0 ? (
+              <div className="space-y-4">
+                {focusSessions.map((session) => (
+                  <Card key={session.id} className="bg-white/5 border-white/10 backdrop-blur-sm p-6">
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="font-semibold">{session.subject || 'Focus Session'}</h3>
+                      <span className="text-white/60 text-sm">
+                        {new Date(session.created_at).toLocaleDateString()}
+                      </span>
+                    </div>
+                    {session.sub_topic && (
+                      <p className="text-white/70 text-sm mb-3">{session.sub_topic}</p>
+                    )}
+                    <div className="flex items-center justify-between">
+                      <div className="w-full bg-white/10 rounded-full h-2">
+                        <div 
+                          className="bg-white h-2 rounded-full transition-all" 
+                          style={{ 
+                            width: `${Math.min(100, (session.time || 0) / 60 * 100)}%`,
+                            backgroundColor: session.completed ? '#10B981' : '#3B82F6'
+                          }} 
+                        />
+                      </div>
+                      <span className="ml-3 text-white/60 text-sm whitespace-nowrap">
+                        {session.time || 0} min
+                      </span>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <Card className="bg-white/5 border-white/10 backdrop-blur-sm p-6 text-center">
+                <p className="text-white/60">No focus sessions yet. Start your first session!</p>
+                <Link href="/flow-mode" className="mt-4 inline-block">
+                  <Button className="bg-white text-black hover:opacity-90">
+                    Start Focusing
+                  </Button>
+                </Link>
+              </Card>
+            )}
           </div>
 
           {/* Time Logged Chart */}
           <div className="mb-12">
             <h2 className="text-2xl font-bold mb-6">Weekly Focus Time</h2>
             <Card className="bg-white/5 border-white/10 backdrop-blur-sm p-6">
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={timeLogData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                  <XAxis dataKey="day" stroke="rgba(255,255,255,0.5)" />
-                  <YAxis stroke="rgba(255,255,255,0.5)" />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: "rgba(0,0,0,0.8)", border: "1px solid rgba(255,255,255,0.2)" }}
-                  />
-                  <Bar dataKey="hours" fill="rgba(255,255,255,0.8)" radius={[8, 8, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              {stats.timeLogData.some(day => day.hours > 0) ? (
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={stats.timeLogData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+                    <XAxis 
+                      dataKey="day" 
+                      stroke="rgba(255,255,255,0.5)" 
+                      tick={{ fill: 'rgba(255,255,255,0.7)' }}
+                    />
+                    <YAxis 
+                      stroke="rgba(255,255,255,0.5)" 
+                      tick={{ fill: 'rgba(255,255,255,0.7)' }}
+                    />
+                    <Tooltip
+                      contentStyle={{ 
+                        backgroundColor: "rgba(23, 23, 23, 0.95)", 
+                        border: "1px solid rgba(255,255,255,0.2)",
+                        borderRadius: '0.5rem',
+                        color: 'white'
+                      }}
+                      labelStyle={{ color: 'rgba(255,255,255,0.8)' }}
+                      formatter={(value: any) => [`${value} hours`, 'Focus Time']}
+                      labelFormatter={(label) => `Day: ${label}`}
+                    />
+                    <Bar 
+                      dataKey="hours" 
+                      fill="rgba(59, 130, 246, 0.8)" 
+                      radius={[8, 8, 0, 0]}
+                      name="Focus Time"
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-[300px] flex items-center justify-center text-white/60">
+                  No focus time logged this week. Start a session to see your progress!
+                </div>
+              )}
             </Card>
           </div>
 

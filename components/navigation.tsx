@@ -77,9 +77,15 @@ export function Navigation() {
               }}
             />
           </SignedIn>
-          <button className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+          <a 
+            href="https://github.com/sai21-learn/focusfactory" 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors inline-flex items-center"
+            aria-label="GitHub Repository"
+          >
             <Github className="w-5 h-5" />
-          </button>
+          </a>
         </div>
       </div>
     </nav>
