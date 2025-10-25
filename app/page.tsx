@@ -123,7 +123,7 @@ export default function Home() {
                 </li>
                 <li>
                   <Link href="/profile" className="text-white/60 hover:text-white transition-colors text-sm">
-                    Profile
+                    profile
                   </Link>
                 </li>
                 <li>

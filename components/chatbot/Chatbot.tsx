@@ -1,21 +1,26 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Send, Bot, X } from 'lucide-react';
+import { Send, Bot, X, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Alert } from '@/components/ui/alert';
 import { cn } from '@/lib/utils';
+import { ChatbotErrorBoundary } from './ChatbotErrorBoundary';
 
 interface Message {
   role: 'user' | 'assistant';
   content: string;
 }
 
-export function Chatbot() {
+// Internal component wrapped by error boundary
+function ChatbotContent() {
   const [isOpen, setIsOpen] = useState(false);
   const [input, setInput] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
@@ -43,6 +48,7 @@ export function Chatbot() {
     setIsLoading(true);
 
     try {
+      setError(null);
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
@@ -54,20 +60,37 @@ export function Chatbot() {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to get response from AI');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to get response from AI');
       }
 
       const data = await response.json();
       setMessages((prev) => [...prev, { role: 'assistant', content: data.content }]);
+      setRetryCount(0); // Reset retry count on success
     } catch (error) {
       console.error('Error:', error);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: 'Sorry, I encountered an error. Please try again later.',
-        },
-      ]);
+      const errorMessage = (error as Error).message || 'An unexpected error occurred';
+      setError(errorMessage);
+
+      // Show a more helpful message if it's an API key issue
+      if (errorMessage.includes('GEMINI_API_KEY')) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: 'The chatbot needs to be configured with a Gemini API key. Please visit https://makersuite.google.com/app/apikey to get your key, then add it to the .env file as GEMINI_API_KEY=your_key_here',
+          },
+        ]);
+      } else if (retryCount < 2) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: 'Sorry, I encountered an error. Please try sending your message again.',
+          },
+        ]);
+        setRetryCount(prev => prev + 1);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -103,6 +126,12 @@ export function Chatbot() {
           </Button>
         </CardHeader>
         <ScrollArea className="flex-1 p-4">
+          {error && (
+            <Alert variant="destructive" className="mb-4">
+              <AlertTriangle className="h-4 w-4" />
+              <span className="ml-2 text-sm">{error}</span>
+            </Alert>
+          )}
           <div className="space-y-4">
             {messages.map((message, index) => (
               <div
@@ -155,5 +184,14 @@ export function Chatbot() {
         </form>
       </Card>
     </div>
+  );
+}
+
+// Export wrapped version
+export function Chatbot() {
+  return (
+    <ChatbotErrorBoundary>
+      <ChatbotContent />
+    </ChatbotErrorBoundary>
   );
 }

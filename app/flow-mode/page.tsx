@@ -28,8 +28,35 @@ export default function FlowMode() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ time, subject, subTopic: subtopic }),
       })
+      if (!response.ok) {
+        let err: any = undefined
+        try { err = await response.json() } catch {}
+        const msg = err?.error || `Failed to generate plan (${response.status})`
+        alert(msg)
+        return
+      }
       const data = await response.json()
-      setOutput(data)
+
+      // Normalize possible legacy shape to what OutputPanel expects
+      const normalized = data?.studyPlan
+        ? data
+        : (typeof data?.output === 'string')
+          ? {
+              studyPlan: data.output,
+              resources: { video: "", documentation: "", exercises: "" },
+              subject,
+              time,
+              subTopic: subtopic,
+              format: "markdown" as const,
+            }
+          : null
+
+      if (!normalized) {
+        alert("Unexpected response from server. Please try again.")
+        return
+      }
+
+      setOutput(normalized)
     } catch (error) {
       console.error("Error generating plan:", error)
       alert("Failed to generate plan")
